@@ -1,8 +1,9 @@
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
-use anyhow::{Error, Result, Context};
 
+use anyhow::{Error, Result, Context};
 use clap::{Parser};
+use num_cpus;
 use chrono::{Duration, offset::Local};
 use jwalk::{WalkDirGeneric, Parallelism};
 use ignore::gitignore::GitignoreBuilder;
@@ -16,8 +17,8 @@ struct Args {
     #[arg(long="dest", help="Destination path for the move")]
     dest: OsString,
 
-    #[arg(long="num_threads", help="Number of threads to use", default_value="4")]
-    num_threads: usize,
+    #[arg(long="num_threads", help="Number of threads to use")]
+    num_threads: Option<usize>,
 
     #[arg(long="exclude_file", help="File containing paths to exclude")]
     exclude_file: Option<OsString>,
@@ -55,11 +56,13 @@ fn main() -> Result<()> {
         }
         None => None,
     };
+
+    let num_t = args.num_threads.unwrap_or(num_cpus::get());
     
     let walk_dir = WalkDirGeneric::<((), Option<Result<std::fs::Metadata>>)>::new(path)
         .skip_hidden(false)
         .follow_links(false)
-        .parallelism(Parallelism::RayonNewPool(args.num_threads))
+        .parallelism(Parallelism::RayonNewPool(num_t))
         .process_read_dir(move |_, _, _, children| {
             // Remove skipped paths
             if let Some(filt) = &filter {
