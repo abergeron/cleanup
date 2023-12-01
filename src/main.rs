@@ -1,10 +1,11 @@
 use std::ffi::OsString;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::{fs::MetadataExt, ffi::OsStringExt};
+use std::io::Write;
 
-use anyhow::{Error, Result, Context};
+use anyhow::{Error, Result, Context, anyhow};
 use clap::{Parser};
 use num_cpus;
-use chrono::{Duration, offset::Local};
+use chrono::{Duration, offset::{Local, TimeZone}, LocalResult};
 use jwalk::{WalkDirGeneric, Parallelism};
 use ignore::gitignore::GitignoreBuilder;
 
@@ -17,10 +18,13 @@ struct Args {
     #[arg(long="dest", help="Destination path for the move")]
     dest: OsString,
 
-    #[arg(long="num_threads", help="Number of threads to use")]
+    #[arg(long="num-threads", help="Number of threads to use")]
     num_threads: Option<usize>,
 
-    #[arg(long="exclude_file", help="File containing paths to exclude")]
+    #[arg(long="dry-run", help="Only print the files that would be moved, but don't move anything")]
+    dry_run: bool,
+
+    #[arg(long="exclude-file", help="File containing paths to exclude")]
     exclude_file: Option<OsString>,
 
     #[arg(long="older", help="Number of days old the files must be to be selected", default_value="0")]
@@ -32,6 +36,14 @@ struct Args {
     nomtime: bool,
     #[arg(long="noctime", help="Don't look at ctime to determine age")]
     noctime: bool,
+}
+
+fn format_time(ts: i64) -> Result<String> {
+    match Local.timestamp_opt(ts, 0) {
+        LocalResult::None => Ok("Invalid date    ".into()),
+        LocalResult::Single(d) => Ok(d.format("%Y-%m-%d %H:%M").to_string()),
+        LocalResult::Ambiguous(_, _) => return Err(anyhow!("This should not happen (1)")),
+    }
 }
 
 fn main() -> Result<()> {
@@ -105,10 +117,25 @@ fn main() -> Result<()> {
             });
         });
 
+    let mut stdout = std::io::stdout();
+    stdout.write_all("atime             ctime             mtime             UID     Path\n".as_bytes())?;
     for entry in walk_dir {
         if let Ok(ent) = entry {
             if ent.file_type.is_file() {
-                println!("{}", ent.path().display());
+                let path = ent.path().into_os_string().into_vec();
+                let meta = ent.client_state.unwrap().expect("No stat data");
+                let atime = format_time(meta.atime())?;
+                let ctime = format_time(meta.ctime())?;
+                let mtime = format_time(meta.mtime())?;
+                let owner = meta.uid();
+                let info = format!("{}, {}, {}, {:6}, ",
+                                   atime, ctime, mtime, owner);
+                stdout.write_all(info.as_bytes())?;
+                stdout.write_all(&path)?;
+                stdout.write_all(b"\n")?;
+                if !args.dry_run {
+                    eprintln!("Moving file")
+                }
             }
         }
     }
