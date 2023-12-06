@@ -8,6 +8,7 @@ use num_cpus;
 use chrono::{Duration, offset::{Local, TimeZone}, LocalResult};
 use jwalk::{WalkDirGeneric, Parallelism};
 use ignore::gitignore::GitignoreBuilder;
+use itertools::Itertools;
 
 #[derive(Parser)]
 #[command(name="cleanup",version="0.0.1")]
@@ -69,7 +70,7 @@ fn main() -> Result<()> {
 
     let num_t = args.num_threads.unwrap_or(num_cpus::get());
     
-    let walk_dir = WalkDirGeneric::<((), Option<Result<std::fs::Metadata>>)>::new(path.clone())
+    let walk_dir = WalkDirGeneric::<((), Option<std::fs::Metadata>)>::new(path.clone())
         .skip_hidden(false)
         .follow_links(false)
         .parallelism(Parallelism::RayonNewPool(num_t))
@@ -90,26 +91,24 @@ fn main() -> Result<()> {
             children.iter_mut().for_each(|dir_entry_result| {
                 if let Ok(dir_entry) = dir_entry_result {
                     if dir_entry.file_type.is_file() {
-                        dir_entry.client_state = Some(dir_entry.metadata().map_err(|e| e.into()));
+                        dir_entry.client_state = dir_entry.metadata().ok();
                     }
                 }
             });
             children.retain(|dir_entry_result| {
                 dir_entry_result.as_ref().map(|dir_entry| {
-                    dir_entry.client_state.as_ref().map_or(true, |rmeta| {
-                        rmeta.as_ref().map_or(true, |meta| {
-                            let mut res = false;
-                            if !args.noatime {
-                                res = res || meta.atime() < cutoff
-                            }
-                            if !args.nomtime {
-                                res = res || meta.mtime() < cutoff
-                            }
-                            if !args.noctime {
-                                res = res || meta.ctime() < cutoff
-                            }
-                            res
-                        })
+                    dir_entry.client_state.as_ref().map_or(true, |meta| {
+                        let mut res = false;
+                        if !args.noatime {
+                            res = res || meta.atime() < cutoff
+                        }
+                        if !args.nomtime {
+                            res = res || meta.mtime() < cutoff
+                        }
+                        if !args.noctime {
+                            res = res || meta.ctime() < cutoff
+                        }
+                        res
                     })
                 }).unwrap_or(false)
             });
@@ -120,15 +119,20 @@ fn main() -> Result<()> {
     for ent in walk_dir.into_iter().filter_map(|item| {
         if let Ok(ent) = item {
             if ent.file_type.is_file() {
-                return Some(ent);
+                return match ent.client_state {
+                    Some(_) => Some(ent),
+                    _ => None
+                }
             }
         }
         return None;
+    }).sorted_unstable_by_key(|ref item| {
+        item.client_state.as_ref().unwrap().uid()
     }) {
         let fpath = ent.path();
         let fdest = dest.join(fpath.strip_prefix(&path)?);
         let fvec = fpath.clone().into_os_string().into_vec();
-        let meta = ent.client_state.unwrap().expect("No stat data");
+        let meta = ent.client_state.unwrap();
         let atime = format_time(meta.atime())?;
         let ctime = format_time(meta.ctime())?;
         let mtime = format_time(meta.mtime())?;
