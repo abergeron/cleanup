@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::os::unix::{fs::MetadataExt, ffi::OsStringExt};
 use std::io::Write;
 
-use anyhow::{Error, Result, Context, anyhow};
+use anyhow::{Result, Context, anyhow};
 use clap::{Parser};
 use num_cpus;
 use chrono::{Duration, offset::{Local, TimeZone}, LocalResult};
@@ -53,9 +53,7 @@ fn main() -> Result<()> {
         .context("Canonicalizng destination path")?;
     let path = std::fs::canonicalize(args.path)
         .context("Canonicalizing source path")?;
-    if dest.starts_with(&path) {
-        return Err(Error::msg("destination is inside of source"));
-    }
+
     let cutoff = (Local::now() - Duration::days(args.older)).timestamp();
 
     let filter = match args.exclude_file {
@@ -71,7 +69,7 @@ fn main() -> Result<()> {
 
     let num_t = args.num_threads.unwrap_or(num_cpus::get());
     
-    let walk_dir = WalkDirGeneric::<((), Option<Result<std::fs::Metadata>>)>::new(path)
+    let walk_dir = WalkDirGeneric::<((), Option<Result<std::fs::Metadata>>)>::new(path.clone())
         .skip_hidden(false)
         .follow_links(false)
         .parallelism(Parallelism::RayonNewPool(num_t))
@@ -122,7 +120,9 @@ fn main() -> Result<()> {
     for entry in walk_dir {
         if let Ok(ent) = entry {
             if ent.file_type.is_file() {
-                let path = ent.path().into_os_string().into_vec();
+                let fpath = ent.path();
+                let fdest = dest.join(fpath.strip_prefix(&path)?);
+                let fvec = fpath.clone().into_os_string().into_vec();
                 let meta = ent.client_state.unwrap().expect("No stat data");
                 let atime = format_time(meta.atime())?;
                 let ctime = format_time(meta.ctime())?;
@@ -131,10 +131,11 @@ fn main() -> Result<()> {
                 let info = format!("{}, {}, {}, {:6}, ",
                                    atime, ctime, mtime, owner);
                 stdout.write_all(info.as_bytes())?;
-                stdout.write_all(&path)?;
+                stdout.write_all(&fvec)?;
                 stdout.write_all(b"\n")?;
                 if !args.dry_run {
-                    eprintln!("Moving file")
+                    std::fs::rename(fpath, fdest)?;
+                    // send emails also
                 }
             }
         }
