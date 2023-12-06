@@ -117,27 +117,29 @@ fn main() -> Result<()> {
 
     let mut stdout = std::io::stdout();
     stdout.write_all("atime             ctime             mtime             UID     Path\n".as_bytes())?;
-    for entry in walk_dir {
-        if let Ok(ent) = entry {
+    for ent in walk_dir.into_iter().filter_map(|item| {
+        if let Ok(ent) = item {
             if ent.file_type.is_file() {
-                let fpath = ent.path();
-                let fdest = dest.join(fpath.strip_prefix(&path)?);
-                let fvec = fpath.clone().into_os_string().into_vec();
-                let meta = ent.client_state.unwrap().expect("No stat data");
-                let atime = format_time(meta.atime())?;
-                let ctime = format_time(meta.ctime())?;
-                let mtime = format_time(meta.mtime())?;
-                let owner = meta.uid();
-                let info = format!("{}, {}, {}, {:6}, ",
-                                   atime, ctime, mtime, owner);
-                stdout.write_all(info.as_bytes())?;
-                stdout.write_all(&fvec)?;
-                stdout.write_all(b"\n")?;
-                if !args.dry_run {
-                    std::fs::rename(fpath, fdest)?;
-                    // send emails also
-                }
+                return Some(ent);
             }
+        }
+        return None;
+    }) {
+        let fpath = ent.path();
+        let fdest = dest.join(fpath.strip_prefix(&path)?);
+        let fvec = fpath.clone().into_os_string().into_vec();
+        let meta = ent.client_state.unwrap().expect("No stat data");
+        let atime = format_time(meta.atime())?;
+        let ctime = format_time(meta.ctime())?;
+        let mtime = format_time(meta.mtime())?;
+        let owner = meta.uid();
+        let info = format!("{}, {}, {}, {:6}, ",
+                           atime, ctime, mtime, owner);
+        stdout.write_all(info.as_bytes())?;
+        stdout.write_all(&fvec)?;
+        stdout.write_all(b"\n")?;
+        if !args.dry_run {
+            std::fs::rename(fpath, fdest)?;
         }
     }
     Ok(())
