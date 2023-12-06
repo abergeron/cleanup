@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 use std::os::unix::{fs::MetadataExt, ffi::OsStringExt};
 use std::io::Write;
+use std::iter::successors;
+use std::collections::hash_map::HashMap;
+use std::path::PathBuf;
 
 use anyhow::{Result, Context, anyhow};
 use clap::{Parser};
@@ -45,6 +48,10 @@ fn format_time(ts: i64) -> Result<String> {
         LocalResult::Single(d) => Ok(d.format("%Y-%m-%d %H:%M").to_string()),
         LocalResult::Ambiguous(_, _) => return Err(anyhow!("This should not happen (1)")),
     }
+}
+
+fn escape_path(path: &PathBuf) -> String {
+    path.clone().into_os_string().into_vec().escape_ascii().to_string()
 }
 
 fn main() -> Result<()> {
@@ -116,7 +123,7 @@ fn main() -> Result<()> {
 
     let mut stdout = std::io::stdout();
     stdout.write_all("atime             ctime             mtime             UID     Path\n".as_bytes())?;
-    for ent in walk_dir.into_iter().filter_map(|item| {
+    for (owner, g) in &walk_dir.into_iter().filter_map(|item| {
         if let Ok(ent) = item {
             if ent.file_type.is_file() {
                 return match ent.client_state {
@@ -128,22 +135,35 @@ fn main() -> Result<()> {
         return None;
     }).sorted_unstable_by_key(|ref item| {
         item.client_state.as_ref().unwrap().uid()
+    }).group_by(|ref item| {
+        item.client_state.as_ref().unwrap().uid()
     }) {
-        let fpath = ent.path();
-        let fdest = dest.join(fpath.strip_prefix(&path)?);
-        let fvec = fpath.clone().into_os_string().into_vec();
-        let meta = ent.client_state.unwrap();
-        let atime = format_time(meta.atime())?;
-        let ctime = format_time(meta.ctime())?;
-        let mtime = format_time(meta.mtime())?;
-        let owner = meta.uid();
-        let info = format!("{}, {}, {}, {:6}, ",
-                           atime, ctime, mtime, owner);
-        stdout.write_all(info.as_bytes())?;
-        stdout.write_all(&fvec)?;
-        stdout.write_all(b"\n")?;
-        if !args.dry_run {
-            std::fs::rename(fpath, fdest)?;
+        let dest = dest.join(owner.to_string());
+        if args.dry_run {
+            std::fs::create_dir(&dest)?;
+        }
+        let mut path_map = HashMap::new();
+        for (n, ent) in successors(Some(0), |n| Some(n + 1)).zip(g) {
+            let fpath = ent.path();
+            let fdest = dest.join(n.to_string());
+            path_map.insert(escape_path(&fdest), escape_path(&fpath));
+            let fvec = fpath.clone().into_os_string().into_vec();
+            let meta = ent.client_state.unwrap();
+            let atime = format_time(meta.atime())?;
+            let ctime = format_time(meta.ctime())?;
+            let mtime = format_time(meta.mtime())?;
+            let info = format!("{}, {}, {}, {:6}, ",
+                               atime, ctime, mtime, owner);
+            stdout.write_all(info.as_bytes())?;
+            stdout.write_all(&fvec)?;
+            stdout.write_all(b"\n")?;
+            if !args.dry_run {
+                std::fs::rename(fpath, fdest)?;
+            }
+        }
+        if args.dry_run {
+            let f = std::fs::File::create(dest.join("map.json"))?;
+            serde_json::to_writer(f, &path_map)?;
         }
     }
     Ok(())
