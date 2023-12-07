@@ -169,7 +169,7 @@ fn main() -> Result<()> {
         item.client_state.as_ref().unwrap().uid()
     }) {
         let dest = dest.join(owner.to_string());
-        if args.dry_run {
+        if !args.dry_run {
             std::fs::create_dir(&dest)?;
         }
         let mut path_map = HashMap::new();
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
                 std::fs::rename(fpath, fdest)?;
             }
         }
-        if args.dry_run {
+        if !args.dry_run {
             let f = std::fs::File::create(dest.join("map.json"))?;
             serde_json::to_writer(f, &path_map)?;
         }
