@@ -51,9 +51,9 @@ fn format_time(ts: i64) -> Result<String> {
 }
 
 fn shell_escape(c: char, buf: &mut String) {
-    let mut s = Vec::with_capacity(4);
+    let mut s = vec![0, 0, 0, 0];
     if c.is_control() {
-        c.encode_utf8(s.as_mut_slice());
+        c.encode_utf8(&mut s);
         for b in &s[..c.len_utf8()] {
             buf.push_str(&"'$'\\");
             buf.push_str(format!("{:03o}", b).as_str());
@@ -176,17 +176,13 @@ fn main() -> Result<()> {
         for (n, ent) in successors(Some(0), |n| Some(n + 1)).zip(g) {
             let fpath = ent.path();
             let fdest = dest.join(n.to_string());
-            path_map.insert(escape_path(&fdest), escape_path(&fpath));
-            let fvec = fpath.clone().into_os_string().into_vec();
+            let epath = escape_path(&fpath);
             let meta = ent.client_state.unwrap();
             let atime = format_time(meta.atime())?;
             let ctime = format_time(meta.ctime())?;
             let mtime = format_time(meta.mtime())?;
-            let info = format!("{}, {}, {}, {:6}, ",
-                               atime, ctime, mtime, owner);
-            stdout.write_all(info.as_bytes())?;
-            stdout.write_all(&fvec)?;
-            stdout.write_all(b"\n")?;
+            println!("{}, {}, {}, {:6}, {}", atime, ctime, mtime, owner, epath);
+            path_map.insert(escape_path(&fdest), epath);
             if !args.dry_run {
                 std::fs::rename(fpath, fdest)?;
             }
