@@ -51,7 +51,42 @@ fn format_time(ts: i64) -> Result<String> {
 }
 
 fn escape_path(path: &PathBuf) -> String {
-    path.clone().into_os_string().into_vec().escape_ascii().to_string()
+    let _vec = path.clone().into_os_string().into_vec();
+    let mut sl = _vec.as_slice();
+    let mut res = String::new();
+    while sl.len() != 0 {
+        match std::str::from_utf8(sl) {
+            Ok(s) => {
+                res.push_str("'");
+                res.push_str(s);
+                res.push_str("'");
+            }
+            Err(e) => {
+                // push the valid portion (which may be "")
+                let v = e.valid_up_to();
+                res.push_str("'");
+                res.push_str(std::str::from_utf8(&sl[..v]).expect(""));
+                res.push_str("'");
+                sl = &sl[v..];
+                if let Some(l) = e.error_len() {
+                    for b in &sl[..l] {
+                        res.push_str("$'\\");
+                        res.push_str(format!("{:03o}", b).as_str());
+                        res.push_str("'");
+                    }
+                    sl = &sl[l..];
+                } else {
+                    for b in sl {
+                        res.push_str("$'\\");
+                        res.push_str(format!("{:03o}", b).as_str());
+                        res.push_str("'");
+                    }
+                    sl = &sl[0..0];
+                }
+            }
+        }
+    }
+    res
 }
 
 fn main() -> Result<()> {
