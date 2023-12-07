@@ -50,42 +50,37 @@ fn format_time(ts: i64) -> Result<String> {
     }
 }
 
+fn shell_escape(c: char, buf: &mut String) {
+    let mut s = Vec::with_capacity(4);
+    if c.is_control() {
+        c.encode_utf8(s.as_mut_slice());
+        for b in &s[..c.len_utf8()] {
+            buf.push_str(&"'$'\\");
+            buf.push_str(format!("{:03o}", b).as_str());
+            buf.push_str("''");
+        }
+    } else if c == '\'' {
+        buf.push_str(&"\\'");
+    } else {
+        buf.push(c);
+    }
+}
+
 fn escape_path(path: &PathBuf) -> String {
-    let _vec = path.clone().into_os_string().into_vec();
-    let mut sl = _vec.as_slice();
-    let mut res = String::new();
-    while sl.len() != 0 {
-        match std::str::from_utf8(sl) {
-            Ok(s) => {
-                res.push_str("'");
-                res.push_str(s);
-                res.push_str("'");
+    let vec = path.clone().into_os_string().into_vec();
+    let mut res = String::with_capacity(512);
+    let mut buf = Vec::with_capacity(8);
+    res.push('\'');
+    for b in vec {
+        buf.push(b);
+        if let Ok(s) = std::str::from_utf8(&buf) {
+            for c in s.chars() {
+                shell_escape(c, &mut res);
             }
-            Err(e) => {
-                // push the valid portion (which may be "")
-                let v = e.valid_up_to();
-                res.push_str("'");
-                res.push_str(std::str::from_utf8(&sl[..v]).expect(""));
-                res.push_str("'");
-                sl = &sl[v..];
-                if let Some(l) = e.error_len() {
-                    for b in &sl[..l] {
-                        res.push_str("$'\\");
-                        res.push_str(format!("{:03o}", b).as_str());
-                        res.push_str("'");
-                    }
-                    sl = &sl[l..];
-                } else {
-                    for b in sl {
-                        res.push_str("$'\\");
-                        res.push_str(format!("{:03o}", b).as_str());
-                        res.push_str("'");
-                    }
-                    sl = &sl[0..0];
-                }
-            }
+            buf.clear();
         }
     }
+    res.push('\'');
     res
 }
 
