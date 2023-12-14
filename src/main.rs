@@ -22,7 +22,7 @@ struct Args {
     #[arg(long="dest", help="Destination path for the move")]
     dest: OsString,
 
-    #[arg(long="num-threads", help="Number of threads to use")]
+    #[arg(long="num-threads", help="Number of threads to use [default: number of cores]")]
     num_threads: Option<usize>,
 
     #[arg(long="dry-run", help="Only print the files that would be moved, but don't move anything")]
@@ -94,15 +94,28 @@ fn main() -> Result<()> {
 
     let cutoff = (Local::now() - Duration::days(args.older)).timestamp();
 
-    let filter = match args.exclude_file {
-        Some(file) => {
+    let filter = if dest.starts_with(&path) || args.exclude_file.is_some() {
+        let mut builder = GitignoreBuilder::new(&path);
+        if dest.starts_with(&path) {
+            let line = dest.strip_prefix(&path)?.to_str().ok_or(
+                anyhow!("dest path must be valid utf-8"))?.to_owned() + "/";
+            eprintln!("{}", line);
+            builder.add_line(None, &line)?;
+        }
+        if let Some(file) = args.exclude_file {
             let fp = std::fs::canonicalize(file)
                 .context("Canonicalizing exclude file")?;
-            let mut builder = GitignoreBuilder::new(&path);
+            if fp.starts_with(&path) {
+                let line = String::from("/") +
+                    fp.strip_prefix(&path)?.to_str().ok_or(
+                        anyhow!("exclude-file path must be valid utf-8"))?;
+                builder.add_line(None, &line)?;
+            }
             builder.add(fp).map_or_else(|| Ok(()), |v| Err(v)).context("parsing exclude file")?;
-            Some(builder.build()?)
         }
-        None => None,
+        Some(builder.build()?)
+    } else {
+        None
     };
 
     let num_t = args.num_threads.unwrap_or(num_cpus::get());
