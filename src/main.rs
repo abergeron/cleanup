@@ -97,9 +97,10 @@ fn main() -> Result<()> {
     let filter = if dest.starts_with(&path) || args.exclude_file.is_some() {
         let mut builder = GitignoreBuilder::new(&path);
         if dest.starts_with(&path) {
-            let line = dest.strip_prefix(&path)?.to_str().ok_or(
-                anyhow!("dest path must be valid utf-8"))?.to_owned() + "/";
-            eprintln!("{}", line);
+            let line = String::from("/") +
+                dest.strip_prefix(&path)?.to_str().ok_or(
+                    anyhow!("dest path must be valid utf-8"))?.to_owned()
+                + "/";
             builder.add_line(None, &line)?;
         }
         if let Some(file) = args.exclude_file {
