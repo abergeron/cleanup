@@ -1,7 +1,6 @@
 use std::ffi::OsString;
-use std::os::unix::{fs::MetadataExt, ffi::OsStringExt};
+use std::os::unix::{fs::MetadataExt, ffi::OsStringExt, fs::DirBuilderExt};
 use std::io::Write;
-use std::iter::successors;
 use std::collections::hash_map::HashMap;
 use std::path::PathBuf;
 
@@ -11,7 +10,6 @@ use num_cpus;
 use chrono::{Duration, offset::{Local, TimeZone}, LocalResult};
 use jwalk::{WalkDirGeneric, Parallelism};
 use ignore::gitignore::GitignoreBuilder;
-use itertools::Itertools;
 
 #[derive(Parser)]
 #[command(name="cleanup",version="0.0.1")]
@@ -99,7 +97,7 @@ fn main() -> Result<()> {
         if dest.starts_with(&path) {
             let line = String::from("/") +
                 dest.strip_prefix(&path)?.to_str().ok_or(
-                    anyhow!("dest path must be valid utf-8"))?.to_owned()
+                    anyhow!("dest path must be valid utf-8"))?
                 + "/";
             builder.add_line(None, &line)?;
         }
@@ -167,7 +165,9 @@ fn main() -> Result<()> {
 
     let mut stdout = std::io::stdout();
     stdout.write_all("atime             ctime             mtime             UID     Path\n".as_bytes())?;
-    for (owner, g) in &walk_dir.into_iter().filter_map(|item| {
+    let mut uid_counter = HashMap::new();
+    let mut uid_path_map = HashMap::new();
+    for ent in walk_dir.into_iter().filter_map(|item| {
         if let Ok(ent) = item {
             if ent.file_type.is_file() {
                 return match ent.client_state {
@@ -177,33 +177,38 @@ fn main() -> Result<()> {
             }
         }
         return None;
-    }).sorted_unstable_by_key(|ref item| {
-        item.client_state.as_ref().unwrap().uid()
-    }).group_by(|ref item| {
-        item.client_state.as_ref().unwrap().uid()
     }) {
-        let dest = dest.join(owner.to_string());
-        if !args.dry_run {
-            std::fs::create_dir(&dest)?;
+        let meta = ent.client_state.as_ref().unwrap();
+        let uid = meta.uid();
+        let path_map = uid_path_map.entry(uid).or_insert_with(|| HashMap::new());
+        let n = {
+            let v = uid_counter.entry(uid).or_insert(0);
+            *v = *v + 1;
+            *v
+        };
+        let udest = dest.join(uid.to_string());
+        if !udest.is_dir() && !args.dry_run {
+            std::fs::DirBuilder::new().mode(0o700).create(&udest)?;
+            std::os::unix::fs::chown(&udest, Some(uid), None)?;
         }
-        let mut path_map = HashMap::new();
-        for (n, ent) in successors(Some(0), |n| Some(n + 1)).zip(g) {
-            let fpath = ent.path();
-            let fdest = dest.join(n.to_string());
-            let epath = escape_path(&fpath);
-            let meta = ent.client_state.unwrap();
-            let atime = format_time(meta.atime())?;
-            let ctime = format_time(meta.ctime())?;
-            let mtime = format_time(meta.mtime())?;
-            println!("{}, {}, {}, {:6}, {}", atime, ctime, mtime, owner, epath);
-            path_map.insert(escape_path(&fdest), epath);
-            if !args.dry_run {
-                std::fs::rename(fpath, fdest)?;
-            }
-        }
+        let fpath = ent.path();
+        let fdest = udest.join(n.to_string());
+        let epath = escape_path(&fpath);
+        let atime = format_time(meta.atime())?;
+        let ctime = format_time(meta.ctime())?;
+        let mtime = format_time(meta.mtime())?;
+        println!("{}, {}, {}, {:6}, {}", atime, ctime, mtime, uid, epath);
+        path_map.insert(escape_path(&fdest), epath);
         if !args.dry_run {
-            let f = std::fs::File::create(dest.join("map.json"))?;
-            serde_json::to_writer(f, &path_map)?;
+            std::fs::rename(fpath, fdest)?;
+        }
+    }
+    if !args.dry_run {
+        for (uid, path_map) in uid_path_map.iter() {
+            let mpath = dest.join(uid.to_string()).join("map.json");
+            let f = std::fs::File::create(&mpath)?;
+            std::os::unix::fs::chown(&mpath, Some(*uid), None)?;
+            serde_json::to_writer(f, path_map)?;
         }
     }
     Ok(())
