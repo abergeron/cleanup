@@ -147,15 +147,15 @@ fn main() -> Result<()> {
             children.retain(|dir_entry_result| {
                 dir_entry_result.as_ref().map(|dir_entry| {
                     dir_entry.client_state.as_ref().map_or(true, |meta| {
-                        let mut res = false;
+                        let mut res = true;
                         if !args.noatime {
-                            res = res || meta.atime() < cutoff
+                            res = res && meta.atime() < cutoff
                         }
                         if !args.nomtime {
-                            res = res || meta.mtime() < cutoff
+                            res = res && meta.mtime() < cutoff
                         }
                         if !args.noctime {
-                            res = res || meta.ctime() < cutoff
+                            res = res && meta.ctime() < cutoff
                         }
                         res
                     })
