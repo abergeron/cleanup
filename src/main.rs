@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::os::unix::{fs::MetadataExt, ffi::OsStringExt, fs::DirBuilderExt};
 use std::io::Write;
-use std::collections::hash_map::HashMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, Context, anyhow};
@@ -165,8 +165,12 @@ fn main() -> Result<()> {
 
     let mut stdout = std::io::stdout();
     stdout.write_all("atime             ctime             mtime             UID     Path\n".as_bytes())?;
-    let mut uid_counter = HashMap::new();
-    let mut uid_path_map = HashMap::new();
+    let paths_db = sled::Config::new()
+        .path(dest.join("paths.db"))
+        .mode(sled::Mode::HighThroughput)
+        .use_compression(true)
+        .open()?;
+    let uid_tree = paths_db.open_tree("cleanup_uids")?;
     for ent in walk_dir.into_iter().filter_map(|item| {
         if let Ok(ent) = item {
             if ent.file_type.is_file() {
@@ -180,12 +184,16 @@ fn main() -> Result<()> {
     }) {
         let meta = ent.client_state.as_ref().unwrap();
         let uid = meta.uid();
-        let path_map = uid_path_map.entry(uid).or_insert_with(|| HashMap::new());
-        let n = {
-            let v = uid_counter.entry(uid).or_insert(0);
-            *v = *v + 1;
-            *v
-        };
+        let n = u32::from_le_bytes(uid_tree.update_and_fetch(uid.to_le_bytes(), |old| {
+            let number = match old {
+                Some(bytes) => {
+                    let number = u32::from_le_bytes(bytes.try_into().unwrap());
+                    number + 1
+                }
+                None => 0,
+            };
+            Some(number.to_le_bytes().to_vec())
+        })?.unwrap().as_ref().try_into().unwrap());
         let udest = dest.join(uid.to_string());
         if !udest.is_dir() && !args.dry_run {
             std::fs::DirBuilder::new().mode(0o700).create(&udest)?;
@@ -198,18 +206,31 @@ fn main() -> Result<()> {
         let ctime = format_time(meta.ctime())?;
         let mtime = format_time(meta.mtime())?;
         println!("{}, {}, {}, {:6}, {}", atime, ctime, mtime, uid, epath);
-        path_map.insert(escape_path(&fdest), epath);
+        let path_map = paths_db.open_tree(uid.to_le_bytes())?;
         if !args.dry_run {
-            std::fs::rename(fpath, fdest)?;
+            std::fs::rename(fpath, &fdest)?;
         }
+        path_map.insert(escape_path(&fdest), epath.into_bytes())?;
     }
     if !args.dry_run {
-        for (uid, path_map) in uid_path_map.iter() {
+        // Generate the map.json files from the central database
+        for name in paths_db.tree_names() {
+            if name.len() != 4 {
+                continue;
+            }
+            let uid = u32::from_le_bytes(name.as_ref().try_into()?);
+            let path_map: HashMap<String, String> =
+                paths_db.open_tree(name)?.iter().map(|item| {
+                    let (key, val) = item.unwrap();
+                    (String::from_utf8(key.to_vec()).unwrap(),
+                     String::from_utf8(val.to_vec()).unwrap())
+                }).collect();
             let mpath = dest.join(uid.to_string()).join("map.json");
             let f = std::fs::File::create(&mpath)?;
-            std::os::unix::fs::chown(&mpath, Some(*uid), None)?;
-            serde_json::to_writer(f, path_map)?;
+            std::os::unix::fs::chown(&mpath, Some(uid), None)?;
+            serde_json::to_writer(f, &path_map)?;
         }
     }
+    paths_db.flush()?;
     Ok(())
 }
