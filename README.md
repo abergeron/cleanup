@@ -36,10 +36,8 @@ stale and will be moved.
 
 If one of the `--no[acm]time` option is specified, this means that
 that check will not be performed and only the other are considered for
-age.
-
-If all of them are specified, or `--older` is not passed, all files
-are considered old and will be moved (subect to the exclude file).
+age. If all of them are specified, all files are considered new and
+will kept.
 
 The `--exclude-file` argument refers to a file in the gitignore format
 and will exclude all files and directories matching the patterns for
