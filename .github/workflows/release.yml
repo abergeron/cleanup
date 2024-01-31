@@ -29,5 +29,3 @@ jobs:
           archive: $bin-$tag-$target
           include: README.md,LICENSE
           leading-dir: true
-          EXTRA_FILES: "README.md LICENSE"
-          ARCHIVE_TYPES: "tar.gz tar.xz"
