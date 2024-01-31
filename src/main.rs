@@ -148,17 +148,17 @@ fn process_ent(
 
 fn process_file(ent: ignore::DirEntry, ctx: &CleanContext) -> Result<()> {
     let meta = ent.metadata()?;
-    let mut keep = true;
+    let mut old = true;
     if !ctx.noatime {
-        keep = keep && meta.atime() < ctx.cutoff
+        old = old && meta.atime() < ctx.cutoff
     }
     if !ctx.nomtime {
-        keep = keep && meta.mtime() < ctx.cutoff
+        old = old && meta.mtime() < ctx.cutoff
     }
     if !ctx.noctime {
-        keep = keep && meta.ctime() < ctx.cutoff
+        old = old && meta.ctime() < ctx.cutoff
     }
-    if keep {
+    if !old {
         return Ok(());
     }
     let uid = meta.uid();
