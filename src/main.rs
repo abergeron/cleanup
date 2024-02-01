@@ -10,7 +10,7 @@ use chrono::{
     Duration, LocalResult,
 };
 use clap::Parser;
-use ignore::{overrides::OverrideBuilder, WalkBuilder, WalkState};
+use ignore::{gitignore::GitignoreBuilder, overrides::OverrideBuilder, WalkBuilder, WalkState};
 
 #[derive(Parser)]
 #[command(name = "cleanup", version = "0.0.1")]
@@ -248,10 +248,17 @@ fn main() -> Result<()> {
     let mut overrides = OverrideBuilder::new(&ctx.path);
     if let Some(file) = args.exclude_file {
         let fp = std::fs::canonicalize(file).context("Canonicalizing exclude file")?;
-        walk_dir_build
-            .add_ignore(&fp)
-            .map_or_else(|| Ok(()), |e| Err(e))
-            .context("parsing exclude file")?;
+        let mut builder = GitignoreBuilder::new(&ctx.path);
+        builder.add(&fp);
+        let filter = builder.build().context("parsing exclude file")?;
+        walk_dir_build.filter_entry(move |dirent| {
+            !filter
+                .matched(
+                    dirent.path(),
+                    dirent.file_type().map_or(false, |v| v.is_dir()),
+                )
+                .is_ignore()
+        });
         if fp.starts_with(&ctx.path) {
             overrides.add(
                 &("!/".to_owned()
